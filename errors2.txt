@@ -1,0 +1,167 @@
+﻿cargo :     Checking beam v0.1.0 
+(C:\Users\btpow\Documents\coding\beam)
+At line:1 char:1
++ cargo check 2>&1 | Out-File -FilePath 
+errors2.txt -Encoding utf8
++ ~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (    
+    Checking be...ts\coding\beam):String) [], R  
+  emoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+error[E0425]: cannot find value `this` in this 
+scope
+    --> src\ui.rs:8071:50
+     |
+8071 | ...                   let cached = this.sh
+ell.token_cache.get(&selected_id).cloned();
+     |                                    ^^^^
+     |                                    |
+     |                                    not 
+found in this scope
+     |                                    help: 
+you might have meant to use `self` here instead
+
+error[E0599]: no method named `password` found 
+for struct `gpui_component::input::Input` in the 
+current scope
+   --> src\ui.rs:976:91
+    |
+976 | ...                   .child(Input::new(&se
+lf.client_secret_input).w_full().password(true))
+    |                                            
+                                 ^^^^^^^^ method 
+not found in `gpui_component::input::Input`
+
+error[E0599]: no method named 
+`load_workspace_registry` found for reference 
+`&S` in the current scope
+    --> src\app_shell.rs:2280:18
+     |
+2279 |               credentials: storage
+     |  __________________________-
+2280 | |                 
+.load_workspace_registry()
+     | |_________________-^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: there is a method `load_workspace` with a 
+similar name
+     |
+2280 -                 .load_workspace_registry()
+2280 +                 .load_workspace()
+     |
+
+error[E0063]: missing field `credentials` in 
+initializer of `WorkspacesRegistry`
+   --> src\models.rs:310:23
+    |
+310 |             registry: WorkspacesRegistry {
+    |                       ^^^^^^^^^^^^^^^^^^ 
+missing `credentials`
+
+error[E0599]: no method named `window_handle` 
+found for mutable reference `&mut 
+gpui::Context<'_, CredentialManagerView>` in the 
+current scope
+   --> src\ui.rs:725:25
+    |
+725 |         let window = cx.window_handle();
+    |                         ^^^^^^^^^^^^^
+    |
+help: there is a method `windows` with a similar 
+name
+    |
+725 -         let window = cx.window_handle();
+725 +         let window = cx.windows();
+    |
+
+error[E0599]: no method named `window_handle` 
+found for mutable reference `&mut 
+gpui::Context<'_, CredentialManagerView>` in the 
+current scope
+   --> src\ui.rs:756:25
+    |
+756 |         let window = cx.window_handle();
+    |                         ^^^^^^^^^^^^^
+    |
+help: there is a method `windows` with a similar 
+name
+    |
+756 -         let window = cx.window_handle();
+756 +         let window = cx.windows();
+    |
+
+error[E0599]: no method named `window_handle` 
+found for mutable reference `&mut 
+gpui::Context<'_, CredentialManagerView>` in the 
+current scope
+   --> src\ui.rs:795:25
+    |
+795 |         let window = cx.window_handle();
+    |                         ^^^^^^^^^^^^^
+    |
+help: there is a method `windows` with a similar 
+name
+    |
+795 -         let window = cx.window_handle();
+795 +         let window = cx.windows();
+    |
+
+error[E0433]: cannot find type `Timer` in this 
+scope
+    --> src\ui.rs:5215:17
+     |
+5215 |                 
+Timer::after(Duration::from_secs(10)).await;
+     |                 ^^^^^ use of undeclared 
+type `Timer`
+
+error[E0609]: no field `destructive` on type 
+`&Theme`
+    --> src\ui.rs:8106:86
+     |
+8106 | ...                   let color = if ttl 
+< 60 { cx.theme().destructive } else { 
+cx.theme().muted_foreground };
+     |                                           
+                 ^^^^^^^^^^^ unknown field
+     |
+     = note: available fields are: `colors`, 
+`highlight_theme`, `light_theme`, `dark_theme`, 
+`mode` ... and 15 others
+     = note: available fields are: `accent`, 
+`accent_foreground`, `accordion`, 
+`accordion_hover`, `background` ... and 95 others
+
+error[E0382]: use of partially moved value: 
+`outcome`
+    --> src\ui.rs:5382:25
+     |
+5375 |                         if let 
+Some((cred_id, token, expires_at)) = 
+outcome.updated_token {
+     |                                           
+    ----- value partially moved here
+...
+5382 |                         outcome
+     |                         ^^^^^^^ value 
+used here after partial move
+     |
+     = note: partial move occurs because value 
+has type `std::string::String`, which does not 
+implement the `Copy` trait
+help: borrow this binding in the pattern to 
+avoid moving the value
+     |
+5375 |                         if let 
+Some((cred_id, ref token, expires_at)) = 
+outcome.updated_token {
+     |                                           
+    +++
+
+Some errors have detailed explanations: E0063, 
+E0382, E0425, E0433, E0599, E0609.
+For more information about an error, try `rustc 
+--explain E0063`.
+error: could not compile `beam` (lib) due to 10 
+previous errors

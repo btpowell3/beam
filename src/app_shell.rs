@@ -630,6 +630,12 @@ pub struct StartupMessage {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct CachedToken {
+    pub token: String,
+    pub expires_at: chrono::DateTime<chrono::Local>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct AppShellState {
     pub layout: AppShellLayout,
     pub modal_stack: ModalStack,
@@ -640,6 +646,8 @@ pub struct AppShellState {
     pub environment_selection: LocalEnvironmentSelectionState,
     pub theme: LocalThemeState,
     pub workspace: WorkspaceState,
+    pub credentials: Vec<crate::models::OAuth2Credential>,
+    pub token_cache: HashMap<Ulid, CachedToken>,
     pub sync_lifecycle: SyncLifecycleState,
 }
 
@@ -655,6 +663,8 @@ impl Default for AppShellState {
             environment_selection: LocalEnvironmentSelectionState::default(),
             theme: LocalThemeState::default(),
             workspace: WorkspaceState::default(),
+            credentials: Vec::new(),
+            token_cache: HashMap::new(),
             sync_lifecycle: SyncLifecycleState::default(),
         }
     }
@@ -1200,6 +1210,10 @@ impl AppShellState {
                 // Keep the current theme; reset sync lifecycle.
                 self.sync_lifecycle = SyncLifecycleState::default();
             }
+            AppEvent::CredentialsUpdated { credentials, .. } => {
+                self.credentials = credentials.clone();
+                self.sync_lifecycle = SyncLifecycleState::default();
+            }
             AppEvent::WorkspaceDeleted {
                 workspace_id,
                 all_workspaces,
@@ -1234,6 +1248,20 @@ impl AppShellState {
                 if self.workspace.workspace_id == Some(workspace.workspace_id) {
                     self.workspace.workspace_name = workspace.name.clone();
                 }
+                self.sync_lifecycle = SyncLifecycleState::default();
+            }
+            AppEvent::TokenUpdated {
+                credential_id,
+                token,
+                expires_at,
+            } => {
+                self.token_cache.insert(
+                    *credential_id,
+                    CachedToken {
+                        token: token.clone(),
+                        expires_at: *expires_at,
+                    },
+                );
             }
         }
     }
@@ -1273,6 +1301,7 @@ pub enum AppOperation {
     CreateWorkspace,
     DeleteWorkspace,
     RenameWorkspace,
+    UpdateCredentials,
 }
 
 impl AppOperation {
@@ -1297,6 +1326,7 @@ impl AppOperation {
             AppOperation::CreateWorkspace => "create_workspace",
             AppOperation::DeleteWorkspace => "delete_workspace",
             AppOperation::RenameWorkspace => "rename_workspace",
+            AppOperation::UpdateCredentials => "update_credentials",
         }
     }
 }
@@ -1384,6 +1414,10 @@ pub enum AppCommand {
         new_name: String,
         command_id: String,
     },
+    UpdateCredentials {
+        credentials: Vec<crate::models::OAuth2Credential>,
+        command_id: String,
+    },
 }
 
 impl AppCommand {
@@ -1407,7 +1441,8 @@ impl AppCommand {
             | AppCommand::SwitchWorkspace { command_id, .. }
             | AppCommand::CreateWorkspace { command_id, .. }
             | AppCommand::DeleteWorkspace { command_id, .. }
-            | AppCommand::RenameWorkspace { command_id, .. } => command_id,
+            | AppCommand::RenameWorkspace { command_id, .. }
+            | AppCommand::UpdateCredentials { command_id, .. } => command_id,
         }
     }
 
@@ -1434,6 +1469,7 @@ impl AppCommand {
             AppCommand::CreateWorkspace { .. } => AppOperation::CreateWorkspace,
             AppCommand::DeleteWorkspace { .. } => AppOperation::DeleteWorkspace,
             AppCommand::RenameWorkspace { .. } => AppOperation::RenameWorkspace,
+            AppCommand::UpdateCredentials { .. } => AppOperation::UpdateCredentials,
         }
     }
 }
@@ -1484,6 +1520,10 @@ pub enum AppEvent {
         folder_id: Ulid,
         command_id: String,
     },
+    CredentialsUpdated {
+        credentials: Vec<crate::models::OAuth2Credential>,
+        command_id: String,
+    },
     WorkspaceSwitched {
         workspace_id: Ulid,
         workspace_name: String,
@@ -1512,6 +1552,11 @@ pub enum AppEvent {
         workspace: WorkspaceEntry,
         all_workspaces: Vec<WorkspaceEntry>,
         command_id: String,
+    },
+    TokenUpdated {
+        credential_id: Ulid,
+        token: String,
+        expires_at: chrono::DateTime<chrono::Local>,
     },
 }
 
@@ -1571,6 +1616,7 @@ fn data_sync_worker_loop(
                     | AppCommand::CreateWorkspace { .. }
                     | AppCommand::DeleteWorkspace { .. }
                     | AppCommand::RenameWorkspace { .. }
+                    | AppCommand::UpdateCredentials { .. }
             );
 
             let _ = event_tx.send(AppEvent::SyncStarted {
@@ -1753,7 +1799,8 @@ fn validate_command_payload(command: &AppCommand) -> std::result::Result<(), Str
         | AppCommand::MoveRequest { .. }
         | AppCommand::DeleteFolder { .. }
         | AppCommand::SwitchWorkspace { .. }
-        | AppCommand::DeleteWorkspace { .. } => {}
+        | AppCommand::DeleteWorkspace { .. }
+        | AppCommand::UpdateCredentials { .. } => {}
     }
     Ok(())
 }
@@ -1932,12 +1979,13 @@ fn handle_command<B: StorageIoBackend>(
                 command_id,
             }])
         }
-        // Workspace commands are handled by handle_workspace_command, never reach here.
+        // Registry/Workspace level commands are handled by handle_workspace_command, never reach here.
         AppCommand::SwitchWorkspace { command_id, .. }
         | AppCommand::CreateWorkspace { command_id, .. }
         | AppCommand::DeleteWorkspace { command_id, .. }
-        | AppCommand::RenameWorkspace { command_id, .. } => Err(format!(
-            "workspace command {command_id} reached handle_command unexpectedly"
+        | AppCommand::RenameWorkspace { command_id, .. }
+        | AppCommand::UpdateCredentials { command_id, .. } => Err(format!(
+            "registry/workspace command {command_id} reached handle_command unexpectedly"
         )),
     }
 }
@@ -2125,6 +2173,17 @@ fn handle_workspace_command(
                 command_id,
             }])
         }
+        AppCommand::UpdateCredentials {
+            credentials,
+            command_id,
+        } => {
+            registry.registry.credentials = credentials.clone();
+            registry_repo.save(registry).map_err(|e| e.to_string())?;
+            Ok(vec![AppEvent::CredentialsUpdated {
+                credentials,
+                command_id,
+            }])
+        }
         _ => unreachable!("non-workspace command routed to handle_workspace_command"),
     }
 }
@@ -2152,6 +2211,7 @@ pub fn startup_preload<S>(
     paths: &BeamPaths,
     workspace_entry: Option<&WorkspaceEntry>,
     all_workspaces: Vec<WorkspaceEntry>,
+    credentials: Vec<crate::models::OAuth2Credential>,
 ) -> StartupLoad
 where
     S: WorkspaceStorage,
@@ -2217,6 +2277,7 @@ where
                 all_workspaces,
                 ..WorkspaceState::default()
             },
+            credentials,
             ..AppShellState::default()
         },
         messages,
@@ -4477,7 +4538,7 @@ expanded_item_ids = ["{folder_id}"]
             "https://example.com/wrong",
         );
 
-        let load = startup_preload(&storage, &paths, None, vec![]);
+        let load = startup_preload(&storage, &paths, None, vec![], vec![]);
         let StartupLoad::Ready { state, messages } = load else {
             panic!("startup should be ready");
         };
@@ -4561,7 +4622,7 @@ expanded_item_ids = ["{folder_id}"]
             "https://example.com/second",
         );
 
-        let load = startup_preload(&storage, &paths, None, vec![]);
+        let load = startup_preload(&storage, &paths, None, vec![], vec![]);
         let StartupLoad::Ready { state, messages } = load else {
             panic!("startup should be ready");
         };
@@ -4623,7 +4684,7 @@ expanded_item_ids = ["{folder_id}"]
         )
         .expect("write broken manifest");
 
-        let load = startup_preload(&storage, &paths, None, vec![]);
+        let load = startup_preload(&storage, &paths, None, vec![], vec![]);
         let StartupLoad::Ready { state, messages } = load else {
             panic!("startup should be ready");
         };

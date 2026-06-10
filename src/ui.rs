@@ -35,7 +35,7 @@ use crate::app_shell::{
 use crate::assets::{Assets, embedded_theme_contents};
 use crate::models::{
     AuthConfig, BodyConfig, EnvironmentFile, EnvironmentScope, EnvironmentVariable, HttpMethod,
-    LocalStateFile, RequestFile,
+    LocalStateFile, OAuth2Credential, OAuth2GrantType, RequestFile
 };
 use crate::paths::{BeamPaths, DataRootPaths};
 use crate::post_script_help::POST_SCRIPT_API_HELP_MARKDOWN;
@@ -203,6 +203,7 @@ pub fn run_app(
                         .downcast::<Root>()
                         .and_then(|h| h.read(cx).ok())
                     {
+                        // Downcast the root view to BeamView entity
                         if let Ok(beam_view) = root.view().clone().downcast::<BeamView>() {
                             let _ = window_handle.update(cx, |_root_view, window, cx| {
                                 beam_view.update(cx, |beam_view, cx| {
@@ -553,6 +554,7 @@ struct EnvironmentManagerDialogView {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SettingsSection {
     Theme,
+    Credentials,
 }
 
 struct SettingsDialogView {
@@ -570,7 +572,7 @@ impl SettingsDialogView {
 }
 
 impl Render for SettingsDialogView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let active_theme_name = cx.theme().theme_name().clone();
         let theme_options: Vec<SharedString> = ThemeRegistry::global(cx)
             .sorted_themes()
@@ -633,6 +635,14 @@ impl Render for SettingsDialogView {
                             }),
                     );
             }
+            SettingsSection::Credentials => {
+                right_panel = right_panel.child(
+                    div()
+                        .w_full()
+                        .h_full()
+                        .child(cx.new(|cx| CredentialManagerView::new(self.beam_view.clone(), window, cx))),
+                );
+            }
         }
 
         v_flex()
@@ -668,6 +678,20 @@ impl Render for SettingsDialogView {
                                         cx.notify();
                                     }))
                                     .child("Theme"),
+                            )
+                            .child(
+                                ListItem::new("settings-section-credentials")
+                                    .w_full()
+                                    .cursor_pointer()
+                                    .rounded(px(8.0))
+                                    .px_2()
+                                    .py_1()
+                                    .selected(self.selected_section == SettingsSection::Credentials)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.selected_section = SettingsSection::Credentials;
+                                        cx.notify();
+                                    }))
+                                    .child("Credentials"),
                             ),
                     )
                     .child(
@@ -683,6 +707,291 @@ impl Render for SettingsDialogView {
                     ),
             )
             .into_any_element()
+    }
+}
+
+struct CredentialManagerView {
+    beam_view: Entity<BeamView>,
+    selected_id: Option<Ulid>,
+    name_input: Entity<InputState>,
+    client_id_input: Entity<InputState>,
+    client_secret_input: Entity<InputState>,
+    token_url_input: Entity<InputState>,
+    scope_input: Entity<InputState>,
+    input_subscriptions: Vec<Subscription>,
+}
+
+impl CredentialManagerView {
+    fn new(beam_view: Entity<BeamView>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("Connection Name"));
+        let client_id_input = cx.new(|cx| InputState::new(window, cx).placeholder("Client ID"));
+        let client_secret_input = cx.new(|cx| InputState::new(window, cx).placeholder("Client Secret"));
+        let token_url_input = cx.new(|cx| InputState::new(window, cx).placeholder("Token URL"));
+        let scope_input = cx.new(|cx| InputState::new(window, cx).placeholder("Scope (Optional)"));
+
+        let mut this = Self {
+            beam_view,
+            selected_id: None,
+            name_input,
+            client_id_input,
+            client_secret_input,
+            token_url_input,
+            scope_input,
+            input_subscriptions: Vec::new(),
+        };
+
+        let credentials = this.beam_view.read(cx).shell.credentials.clone();
+        if let Some(first) = credentials.first() {
+            this.selected_id = Some(first.id);
+            this.sync_inputs_from_credential(first, window, cx);
+        }
+
+        this.rebuild_subscriptions(window, cx);
+        this
+    }
+
+
+    fn rebuild_subscriptions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.input_subscriptions.clear();
+
+        let name_input = self.name_input.clone();
+        self.input_subscriptions.push(cx.subscribe_in(&name_input, window, move |this, _, ev, _, cx| {
+            if matches!(ev, InputEvent::Change) {
+                this.save_current(cx);
+            }
+        }));
+
+        let client_id_input = self.client_id_input.clone();
+        self.input_subscriptions.push(cx.subscribe_in(&client_id_input, window, move |this, _, ev, _, cx| {
+            if matches!(ev, InputEvent::Change) {
+                this.save_current(cx);
+            }
+        }));
+
+        let client_secret_input = self.client_secret_input.clone();
+        self.input_subscriptions.push(cx.subscribe_in(&client_secret_input, window, move |this, _, ev, _, cx| {
+            if matches!(ev, InputEvent::Change) {
+                this.save_current(cx);
+            }
+        }));
+
+        let token_url_input = self.token_url_input.clone();
+        self.input_subscriptions.push(cx.subscribe_in(&token_url_input, window, move |this, _, ev, _, cx| {
+            if matches!(ev, InputEvent::Change) {
+                this.save_current(cx);
+            }
+        }));
+
+        let scope_input = self.scope_input.clone();
+        self.input_subscriptions.push(cx.subscribe_in(&scope_input, window, move |this, _, ev, _, cx| {
+            if matches!(ev, InputEvent::Change) {
+                this.save_current(cx);
+            }
+        }));
+    }
+
+    fn sync_inputs_from_credential(&mut self, cred: &OAuth2Credential, window: &mut Window, cx: &mut Context<Self>) {
+        self.name_input.update(cx, |i, cx| i.set_value(cred.name.clone(), window, cx));
+        self.client_id_input.update(cx, |i, cx| i.set_value(cred.client_id.clone(), window, cx));
+        self.client_secret_input.update(cx, |i, cx| i.set_value(cred.client_secret.clone(), window, cx));
+        self.token_url_input.update(cx, |i, cx| i.set_value(cred.token_url.clone(), window, cx));
+        self.scope_input.update(cx, |i, cx| i.set_value(cred.scope.clone().unwrap_or_default(), window, cx));
+    }
+
+    fn save_current(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.selected_id else { return };
+        let name = self.name_input.read(cx).value().to_string();
+        let client_id = self.client_id_input.read(cx).value().to_string();
+        let client_secret = self.client_secret_input.read(cx).value().to_string();
+        let token_url = self.token_url_input.read(cx).value().to_string();
+        let scope_text = self.scope_input.read(cx).value().to_string();
+        let scope = if scope_text.trim().is_empty() { None } else { Some(scope_text) };
+
+        let mut credentials = self.beam_view.read(cx).shell.credentials.clone();
+        if let Some(cred) = credentials.iter_mut().find(|c| c.id == id) {
+            cred.name = name;
+            cred.client_id = client_id;
+            cred.client_secret = client_secret;
+            cred.token_url = token_url;
+            cred.scope = scope;
+
+            let command = AppCommand::UpdateCredentials {
+                credentials,
+                command_id: next_command_id(),
+            };
+            self.beam_view.update(cx, |this, _| {
+                let _ = this.publish_app_command(command);
+            });
+        }
+    }
+
+    fn add_credential(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let mut credentials = self.beam_view.read(cx).shell.credentials.clone();
+        let new_id = Ulid::new();
+        let new_cred = OAuth2Credential {
+            id: new_id,
+            name: "New Connection".to_string(),
+            grant_type: OAuth2GrantType::ClientCredentials,
+            client_id: String::new(),
+            client_secret: String::new(),
+            token_url: String::new(),
+            scope: None,
+        };
+        credentials.push(new_cred.clone());
+        
+        let command = AppCommand::UpdateCredentials {
+            credentials,
+            command_id: next_command_id(),
+        };
+        self.beam_view.update(cx, |this, _| {
+            let _ = this.publish_app_command(command);
+        });
+
+        self.selected_id = Some(new_id);
+        self.sync_inputs_from_credential(&new_cred, window, cx);
+        cx.notify();
+    }
+
+    fn delete_credential(&mut self, id: Ulid, window: &mut Window, cx: &mut Context<Self>) {
+        let mut credentials = self.beam_view.read(cx).shell.credentials.clone();
+        credentials.retain(|c| c.id != id);
+
+        let command = AppCommand::UpdateCredentials {
+            credentials: credentials.clone(),
+            command_id: next_command_id(),
+        };
+        self.beam_view.update(cx, |this, _| {
+            let _ = this.publish_app_command(command);
+        });
+
+        if self.selected_id == Some(id) {
+            self.selected_id = credentials.first().map(|c| c.id);
+            if let Some(first) = credentials.first() {
+                self.sync_inputs_from_credential(first, window, cx);
+            }
+        }
+        cx.notify();
+    }
+}
+
+impl Render for CredentialManagerView {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let credentials = self.beam_view.read(cx).shell.credentials.clone();
+        let selected_id = self.selected_id;
+
+        h_flex()
+            .w_full()
+            .h_full()
+            .gap_3()
+            .child(
+                // Left side: list of connections
+                v_flex()
+                    .w(px(260.0))
+                    .h_full()
+                    .rounded(px(8.0))
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .bg(cx.theme().background)
+                    .p_2()
+                    .gap_2()
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .overflow_y_scrollbar()
+                            .children(credentials.into_iter().map(|cred| {
+                                let id = cred.id;
+                                ListItem::new(format!("cred-{}", id))
+                                    .child(
+                                        h_flex()
+                                            .w_full()
+                                            .items_center()
+                                            .justify_between()
+                                            .child(div().truncate().child(cred.name))
+                                            .child(
+                                                Button::new(format!("delete-cred-{}", id))
+                                                    .ghost()
+                                                    .small()
+                                                    .icon(Icon::default().path("icons/trash.svg").size(px(14.0)).text_color(cx.theme().muted_foreground))
+                                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                                        this.delete_credential(id, window, cx);
+                                                    }))
+                                            )
+                                    )
+                                    .selected(Some(id) == selected_id)
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.selected_id = Some(id);
+                                        let credentials = this.beam_view.read(cx).shell.credentials.clone();
+                                        if let Some(found) = credentials.iter().find(|c| c.id == id) {
+                                            this.sync_inputs_from_credential(found, window, cx);
+                                        }
+                                        cx.notify();
+                                    }))
+                            }))
+                    )
+                    .child(
+                        Button::new("add-credential")
+                            .w_full()
+                            .small()
+                            .label("Add Connection")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.add_credential(window, cx);
+                            }))
+                    )
+            )
+            .child(
+                // Right side: details
+                v_flex()
+                    .flex_1()
+                    .h_full()
+                    .rounded(px(8.0))
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .bg(cx.theme().background)
+                    .p_4()
+                    .gap_4()
+                    .child(if selected_id.is_some() {
+                        v_flex()
+                            .gap_4()
+                            .child(div().text_sm().font_semibold().child("OAuth2 Client Credentials"))
+                            .child(
+                                v_flex().gap_1()
+                                    .child(div().text_xs().text_color(cx.theme().muted_foreground).child("Name"))
+                                    .child(Input::new(&self.name_input).w_full())
+                            )
+                            .child(
+                                v_flex().gap_1()
+                                    .child(div().text_xs().text_color(cx.theme().muted_foreground).child("Token URL"))
+                                    .child(Input::new(&self.token_url_input).w_full())
+                            )
+                            .child(
+                                v_flex().gap_1()
+                                    .child(div().text_xs().text_color(cx.theme().muted_foreground).child("Client ID"))
+                                    .child(Input::new(&self.client_id_input).w_full())
+                            )
+                            .child(
+                                v_flex().gap_1()
+                                    .child(div().text_xs().text_color(cx.theme().muted_foreground).child("Client Secret"))
+                                    .child(Input::new(&self.client_secret_input).w_full())
+                            )
+                            .child(
+                                v_flex().gap_1()
+                                    .child(div().text_xs().text_color(cx.theme().muted_foreground).child("Scope (optional)"))
+                                    .child(Input::new(&self.scope_input).w_full())
+                            )
+                            .into_any_element()
+                    } else {
+                        div()
+                            .w_full()
+                            .h_full()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("Select a connection from the left pane.")
+                            .into_any_element()
+                    })
+            )
     }
 }
 
@@ -2568,6 +2877,13 @@ impl BeamView {
                     key.clone()
                         .unwrap_or_else(|| DEFAULT_API_KEY_HEADER_NAME.to_string()),
                     value.clone().unwrap_or_default(),
+                ),
+                AuthConfig::BearerStored { .. } => (
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    DEFAULT_API_KEY_HEADER_NAME.to_string(),
+                    String::new(),
                 ),
             };
 
@@ -4890,6 +5206,56 @@ impl BeamView {
         view
     }
 
+    fn start_token_renewal_task(&self, cx: &mut Context<Self>) {
+        // Capture a weak entity reference to BeamView.
+        let weak_entity = cx.weak_entity();
+        cx.spawn(async move |_, cx| {
+
+            loop {
+                // Wait 10 seconds between checks.
+                cx.background_executor().timer(Duration::from_secs(10)).await;
+
+                // Determine which credentials need renewal via a synchronous update on the weak entity.
+                let needs_renewal = match weak_entity.update(cx, |view, _| {
+                    let mut needs = Vec::new();
+                    let now = chrono::Local::now();
+                    for (cred_id, cached) in &view.shell.token_cache {
+                        if cached.expires_at < now + chrono::Duration::minutes(5) {
+                            if let Some(cred) = view.shell.credentials.iter().find(|c| c.id == *cred_id) {
+                                needs.push((*cred_id, cred.clone()));
+                            }
+                        }
+                    }
+                    needs
+                }) {
+                    Ok(v) => v,
+                    Err(_) => break, // Weak reference dead, stop the task.
+                };
+
+                if needs_renewal.is_empty() {
+                    continue;
+                }
+
+                // Shared HTTP client for all renewals.
+                let client = shared_http_client().map(|c| c.clone()).unwrap_or_else(|_| Client::new());
+
+                // Perform renewals sequentially (could be parallelized in the future).
+                for (cred_id, cred) in needs_renewal {
+                    if let Ok((token, expires_at)) = perform_oauth2_client_credentials_flow(&client, &cred).await {
+                        // Apply the token update back onto the BeamView state.
+                        let _ = weak_entity.update(cx, |bv, _| {
+                            bv.shell.apply_event(&AppEvent::TokenUpdated {
+                                credential_id: cred_id,
+                                token,
+                                expires_at,
+                            });
+                        });
+                    }
+                }
+            }
+        }).detach();
+    }
+
     fn send_request(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         struct RequestRunCompletion {
             request_id: Ulid,
@@ -4962,12 +5328,16 @@ impl BeamView {
             }
         }
 
+        let credentials = self.shell.credentials.clone();
+        let token_cache = self.shell.token_cache.clone();
         http_runtime.spawn(async move {
             let request_future = Self::execute_request_with_script(
                 request_snapshot,
                 Some(request_id),
                 no_environment_selected,
                 environment_variables,
+                credentials,
+                token_cache,
             );
             let outcome = tokio::select! {
                 _ = async {
@@ -5010,16 +5380,28 @@ impl BeamView {
                     this.shell.workspace_tree.selected_request_id(),
                     request_id,
                 );
-                let Some(outcome) = maybe_outcome else {
-                    if should_update_visible_response {
-                        this.response_status = "Canceled".to_string();
-                        this.response_time = "—".to_string();
-                        this.response_size = "—".to_string();
+                let outcome = match maybe_outcome {
+                    Some(outcome) => {
+                        if let Some((cred_id, ref token, expires_at)) = outcome.updated_token {
+                            this.shell.apply_event(&AppEvent::TokenUpdated {
+                                credential_id: cred_id,
+                                token: token.clone(),
+                                expires_at,
+                            });
+                        }
+                        outcome
                     }
-                    cx.notify();
-                    return;
+                    None => {
+                        if should_update_visible_response {
+                            this.response_status = "Canceled".to_string();
+                            this.response_time = "—".to_string();
+                            this.response_size = "—".to_string();
+                        }
+                        cx.notify();
+                        return;
+                    }
                 };
-                let response = outcome.response;
+                let response = &outcome.response;
                 let response_status = response.status.clone();
                 let response_time = response.time.clone();
                 let response_size = response.size.clone();
@@ -5037,11 +5419,11 @@ impl BeamView {
                     });
                     this.response_headers_raw = response_headers;
                     this.response_content_type = response.content_type.clone();
-                    this.script_result = outcome.script_result.clone();
+                    this.script_result = outcome.script_result.as_ref().map(|r| r.clone());
                 }
                 if let (Some(environment_id), Some(variables)) = (
                     selected_environment_id,
-                    outcome.updated_environment_variables,
+                    outcome.updated_environment_variables.clone(),
                 ) {
                     let command = AppCommand::UpdateEnvironmentVariables {
                         environment_id,
@@ -5083,14 +5465,20 @@ impl BeamView {
         request_id: Option<Ulid>,
         no_environment_selected: bool,
         environment_variables: Vec<EnvironmentVariable>,
+        credentials: Vec<crate::models::OAuth2Credential>,
+        token_cache: HashMap<Ulid, crate::app_shell::CachedToken>,
     ) -> SendRequestOutcome {
-        let response = execute_http_request(request.clone()).await;
+        let execution_result = execute_http_request(request.clone(), credentials, token_cache).await;
+        let response = execution_result.response;
+        let updated_token = execution_result.updated_token;
         let script_text = request.post_script.clone().unwrap_or_default();
         if script_text.trim().is_empty() {
             return SendRequestOutcome {
                 response,
                 script_result: None,
                 updated_environment_variables: None,
+                no_environment_selected_with_env_writes: false,
+                updated_token,
             };
         }
 
@@ -5132,6 +5520,8 @@ impl BeamView {
                 no_environment_selected_with_env_writes,
             )),
             updated_environment_variables,
+            no_environment_selected_with_env_writes,
+            updated_token,
         }
     }
 
@@ -7520,6 +7910,7 @@ impl BeamView {
                     let api_key_value_input = self.request_auth_api_key_value_input.clone();
                     let is_none = matches!(self.request.auth, AuthConfig::None);
                     let is_bearer = matches!(self.request.auth, AuthConfig::Bearer { .. });
+                    let is_bearer_stored = matches!(self.request.auth, AuthConfig::BearerStored { .. });
                     let is_basic = matches!(self.request.auth, AuthConfig::Basic { .. });
                     let is_api_key = matches!(self.request.auth, AuthConfig::ApiKey { .. });
 
@@ -7545,9 +7936,12 @@ impl BeamView {
                                 .small()
                                 .ghost()
                                 .cursor_pointer()
-                                .selected(is_bearer)
+                                .selected(is_bearer || is_bearer_stored)
                                 .label("Bearer Token")
                                 .on_click(cx.listener(move |this, _, _, cx| {
+                                    if matches!(this.request.auth, AuthConfig::Bearer { .. } | AuthConfig::BearerStored { .. }) {
+                                        return;
+                                    }
                                     let token = bearer_input.read(cx).value().to_string();
                                     this.request.auth = AuthConfig::Bearer {
                                         token: (!token.trim().is_empty()).then_some(token),
@@ -7632,49 +8026,163 @@ impl BeamView {
                             .text_color(cx.theme().muted_foreground)
                             .child("No auth header will be added.")
                             .into_any_element(),
-                        AuthConfig::Bearer { .. } => {
+                        AuthConfig::Bearer { .. } | AuthConfig::BearerStored { .. } => {
                             let bearer_entity = self.request_auth_bearer_token_input.clone();
+                            let credentials = self.shell.credentials.clone();
+                            let current_credential_id = if let AuthConfig::BearerStored { credential_id } = &self.request.auth {
+                                Some(*credential_id)
+                            } else {
+                                None
+                            };
+
                             v_flex()
                                 .w_full()
                                 .gap_2()
                                 .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child("Token"),
-                                )
-                                .child(
-                                    div()
-                                        .id("env-hover-auth-bearer")
-                                        .on_mouse_move(cx.listener(
-                                            move |this, event: &MouseMoveEvent, _, cx| {
-                                                this.update_env_var_hover_for_input(
-                                                    &bearer_entity,
-                                                    event.position,
-                                                    cx,
-                                                );
-                                            },
-                                        ))
-                                        .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
-                                            if !hovered {
-                                                this.clear_env_var_hover(cx);
-                                            }
-                                        }))
+                                    h_flex()
+                                        .items_center()
+                                        .gap_1()
                                         .child(
-                                            Input::new(&self.request_auth_bearer_token_input)
+                                            Button::new("auth-bearer-mode-manual")
                                                 .small()
-                                                .w_full()
-                                                .context_menu({
-                                                    move |menu, _, cx| {
-                                                        Self::build_text_edit_context_menu(
-                                                            menu,
-                                                            bearer_has_selection,
-                                                            cx.theme().muted_foreground,
-                                                        )
+                                                .ghost()
+                                                .cursor_pointer()
+                                                .selected(current_credential_id.is_none())
+                                                .label("Manual")
+                                                .on_click(cx.listener({
+                                                    let bearer_entity = bearer_entity.clone();
+                                                    move |this, _, _, cx| {
+                                                        let token = bearer_entity.read(cx).value().to_string();
+                                                        this.request.auth = AuthConfig::Bearer {
+                                                            token: (!token.trim().is_empty()).then_some(token),
+                                                        };
+                                                        this.schedule_request_save(cx);
+                                                        cx.notify();
                                                     }
-                                                }),
-                                        ),
+                                                }))
+                                        )
+                                        .child(
+                                            Button::new("auth-bearer-mode-stored")
+                                                .small()
+                                                .ghost()
+                                                .cursor_pointer()
+                                                .selected(current_credential_id.is_some())
+                                                .label("Stored Connection")
+                                                .disabled(credentials.is_empty())
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    let credentials = this.shell.credentials.clone();
+                                                    if let Some(first) = credentials.first() {
+                                                        this.request.auth = AuthConfig::BearerStored { credential_id: first.id };
+                                                        this.schedule_request_save(cx);
+                                                        cx.notify();
+                                                    }
+                                                }))
+                                        )
                                 )
+                                .child(if let Some(selected_id) = current_credential_id {
+                                    let selected_name = credentials.iter().find(|c| c.id == selected_id).map(|c| c.name.clone()).unwrap_or_else(|| "Unknown".to_string());
+                                    let cached = self.shell.token_cache.get(&selected_id).cloned();
+                                    let view_weak = cx.entity();
+                                    
+                                    v_flex()
+                                        .w_full()
+                                        .gap_1()
+                                        .child(
+                                            DropdownButton::new("auth-stored-credential-dropdown")
+                                                .w_full()
+                                                .button(
+                                                    Button::new("auth-stored-credential-dropdown-button")
+                                                        .w_full()
+                                                        .justify_start()
+                                                        .label(selected_name)
+                                                )
+                                                .dropdown_menu(move |menu, window, _| {
+                                                    credentials.clone().into_iter().fold(menu, |menu, cred| {
+                                                        let id = cred.id;
+                                                        let name = cred.name.clone();
+                                                        let view_weak = view_weak.clone();
+                                                        menu.item(
+                                                            PopupMenuItem::element(move |_, _| {
+                                                                div().w_full().px_2().py_1().cursor_pointer().child(name.clone())
+                                                            })
+                                                            .on_click(window.listener_for(&view_weak, move |this, _, _, cx| {
+                                                                this.request.auth = AuthConfig::BearerStored { credential_id: id };
+                                                                this.schedule_request_save(cx);
+                                                                cx.notify();
+                                                            }))
+                                                        )
+                                                    })
+                                                })
+                                        )
+                                        .child(
+                                            if let Some(cached) = cached {
+                                                let now = chrono::Local::now();
+                                                let ttl = (cached.expires_at - now).num_seconds();
+                                                let color = if ttl < 60 { cx.theme().danger } else { cx.theme().muted_foreground };
+                                                let text = if ttl > 0 {
+                                                    format!("Expires in {}m {}s", ttl / 60, ttl % 60)
+                                                } else {
+                                                    "Expired".to_string()
+                                                };
+                                                div()
+                                                    .px_2()
+                                                    .text_xs()
+                                                    .text_color(color)
+                                                    .child(text)
+                                            } else {
+                                                div()
+                                                    .px_2()
+                                                    .text_xs()
+                                                    .text_color(cx.theme().muted_foreground)
+                                                    .child("No token cached")
+                                            }
+                                        )
+                                        .into_any_element()
+                                } else {
+                                    v_flex()
+                                        .w_full()
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(cx.theme().muted_foreground)
+                                                .child("Token"),
+                                        )
+                                        .child(
+                                            div()
+                                                .id("env-hover-auth-bearer")
+                                                .on_mouse_move(cx.listener(
+                                                    move |this, event: &MouseMoveEvent, _, cx| {
+                                                        this.update_env_var_hover_for_input(
+                                                            &bearer_entity,
+                                                            event.position,
+                                                            cx,
+                                                        );
+                                                    },
+                                                ))
+                                                .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                                                    if !hovered {
+                                                        this.clear_env_var_hover(cx);
+                                                    }
+                                                }))
+                                                .child(
+                                                    Input::new(&self.request_auth_bearer_token_input)
+                                                        .small()
+                                                        .w_full()
+                                                        .context_menu({
+                                                            let bearer_has_selection = !self.request_auth_bearer_token_input.read(cx).selected_range().is_empty();
+                                                            move |menu, _, cx| {
+                                                                Self::build_text_edit_context_menu(
+                                                                    menu,
+                                                                    bearer_has_selection,
+                                                                    cx.theme().muted_foreground,
+                                                                )
+                                                            }
+                                                        }),
+                                                ),
+                                        )
+                                        .into_any_element()
+                                })
                                 .into_any_element()
                         }
                         AuthConfig::Basic { .. } => {
@@ -8587,10 +9095,12 @@ struct HttpResponseView {
     content_type: Option<String>,
 }
 
-struct SendRequestOutcome {
-    response: HttpResponseView,
-    script_result: Option<PersistedScriptResult>,
-    updated_environment_variables: Option<Vec<EnvironmentVariable>>,
+pub struct SendRequestOutcome {
+    pub response: HttpResponseView,
+    pub script_result: Option<PersistedScriptResult>,
+    pub updated_environment_variables: Option<Vec<EnvironmentVariable>>,
+    pub no_environment_selected_with_env_writes: bool,
+    pub updated_token: Option<(Ulid, String, chrono::DateTime<chrono::Local>)>,
 }
 
 static HTTP_CLIENT: OnceLock<Result<Client, String>> = OnceLock::new();
@@ -8753,6 +9263,7 @@ fn resolve_request_with_environment(
                 *auth_value = resolve_template_variables(auth_value, &resolved_env);
             }
         }
+        AuthConfig::BearerStored { .. } => {}
     }
 
     match &mut request.body {
@@ -8848,18 +9359,31 @@ fn resolve_template_variables(input: &str, resolved_env: &HashMap<String, String
     output
 }
 
-async fn execute_http_request(request: RequestAuthoringState) -> HttpResponseView {
+pub struct RequestExecutionResult {
+    pub response: HttpResponseView,
+    pub updated_token: Option<(Ulid, String, chrono::DateTime<chrono::Local>)>,
+}
+
+async fn execute_http_request(
+    request: RequestAuthoringState,
+    credentials: Vec<crate::models::OAuth2Credential>,
+    token_cache: HashMap<Ulid, crate::app_shell::CachedToken>,
+) -> RequestExecutionResult {
     let start = Instant::now();
+    let mut updated_token = None;
     let client = match shared_http_client() {
         Ok(client) => client,
         Err(error) => {
-            return HttpResponseView {
-                status: "Error".to_string(),
-                time: "—".to_string(),
-                size: "—".to_string(),
-                body: error,
-                headers: String::new(),
-                content_type: None,
+            return RequestExecutionResult {
+                response: HttpResponseView {
+                    status: "Error".to_string(),
+                    time: "—".to_string(),
+                    size: "—".to_string(),
+                    body: error,
+                    headers: String::new(),
+                    content_type: None,
+                },
+                updated_token: None,
             };
         }
     };
@@ -8920,6 +9444,49 @@ async fn execute_http_request(request: RequestAuthoringState) -> HttpResponseVie
                         builder = builder.query(&query_pairs);
                     }
                 }
+            }
+        }
+        AuthConfig::BearerStored { credential_id } => {
+            if let Some(cred) = credentials.iter().find(|c| c.id == *credential_id) {
+                let now = chrono::Local::now();
+                let cached = token_cache.get(credential_id).filter(|t| t.expires_at > now + chrono::Duration::seconds(30));
+                
+                let token = if let Some(cached) = cached {
+                    cached.token.clone()
+                } else {
+                    match perform_oauth2_client_credentials_flow(&client, cred).await {
+                        Ok((token, expires_at)) => {
+                            updated_token = Some((*credential_id, token.clone(), expires_at));
+                            token
+                        }
+                        Err(error) => {
+                            return RequestExecutionResult {
+                                response: HttpResponseView {
+                                    status: "Auth Error".to_string(),
+                                    time: "—".to_string(),
+                                    size: "—".to_string(),
+                                    body: format!("OAuth2 flow failed: {error}"),
+                                    headers: String::new(),
+                                    content_type: None,
+                                },
+                                updated_token: None,
+                            };
+                        }
+                    }
+                };
+                builder = builder.bearer_auth(token);
+            } else {
+                return RequestExecutionResult {
+                    response: HttpResponseView {
+                        status: "Auth Error".to_string(),
+                        time: "—".to_string(),
+                        size: "—".to_string(),
+                        body: "Stored credential not found.".to_string(),
+                        headers: String::new(),
+                        content_type: None,
+                    },
+                    updated_token: None,
+                };
             }
         }
     }
@@ -9000,39 +9567,82 @@ async fn execute_http_request(request: RequestAuthoringState) -> HttpResponseVie
                     let value = value.to_str().unwrap_or("<non-utf8>");
                     format!("{}: {value}", name.as_str())
                 })
-                .collect::<Vec<_>>()
+                .collect::<Vec<String>>()
                 .join("\n");
-            match response.bytes().await {
-                Ok(bytes) => {
-                    let body = String::from_utf8_lossy(&bytes).to_string();
-                    HttpResponseView {
-                        status: status_text,
-                        time: format!("{} ms", start.elapsed().as_millis()),
-                        size: format_bytes(bytes.len()),
-                        body,
-                        headers,
-                        content_type,
-                    }
-                }
-                Err(error) => HttpResponseView {
+            let body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "<failed to read body>".to_string());
+
+            RequestExecutionResult {
+                response: HttpResponseView {
                     status: status_text,
                     time: format!("{} ms", start.elapsed().as_millis()),
-                    size: "—".to_string(),
-                    body: format!("Failed to read response body: {error}"),
+                    size: format_bytes(body.len()),
+                    body,
                     headers,
                     content_type,
                 },
+                updated_token,
             }
         }
-        Err(error) => HttpResponseView {
-            status: "Error".to_string(),
-            time: format!("{} ms", start.elapsed().as_millis()),
-            size: "—".to_string(),
-            body: format!("Request failed: {error}"),
-            headers: String::new(),
-            content_type: None,
+        Err(error) => RequestExecutionResult {
+            response: HttpResponseView {
+                status: "Error".to_string(),
+                time: format!("{} ms", start.elapsed().as_millis()),
+                size: "—".to_string(),
+                body: format!("Request failed: {error}"),
+                headers: String::new(),
+                content_type: None,
+            },
+            updated_token: None,
         },
     }
+}
+
+async fn perform_oauth2_client_credentials_flow(
+    client: &Client,
+    cred: &crate::models::OAuth2Credential,
+) -> Result<(String, chrono::DateTime<chrono::Local>), String> {
+    let mut params = vec![
+        ("grant_type", "client_credentials"),
+        ("client_id", &cred.client_id),
+        ("client_secret", &cred.client_secret),
+    ];
+    if let Some(scope) = &cred.scope {
+        params.push(("scope", scope));
+    }
+
+    let response = client
+        .post(&cred.token_url)
+        .form(&params)
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {e}"))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "<failed to read body>".to_string());
+        return Err(format!("Server returned {status}: {body}"));
+    }
+
+    let token_response: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse JSON: {e}"))?;
+
+    let token = token_response["access_token"]
+        .as_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| "No access_token found in response".to_string())?;
+
+    let expires_in = token_response["expires_in"].as_i64().unwrap_or(3600);
+    let expires_at = chrono::Local::now() + chrono::Duration::seconds(expires_in);
+
+    Ok((token, expires_at))
 }
 
 fn http_method_to_reqwest(method: HttpMethod) -> Method {

@@ -1,0 +1,131 @@
+﻿cargo :     Checking beam v0.1.0 
+(C:\Users\btpow\Documents\coding\beam)
+At line:1 char:1
++ cargo check 2>&1 | Out-File -FilePath 
+errors3.txt -Encoding utf8; Get ...
++ ~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ( 
+       Checking be...ts\coding\beam):String)  
+   [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandEr 
+   ror
+ 
+error[E0599]: no method named 
+`load_workspace_registry` found for reference 
+`&S` in the current scope
+    --> src\app_shell.rs:2280:18
+     |
+2279 |               credentials: storage
+     |  __________________________-
+2280 | |                 
+.load_workspace_registry()
+     | 
+|_________________-^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: there is a method `load_workspace` with 
+a similar name
+     |
+2280 -                 
+.load_workspace_registry()
+2280 +                 .load_workspace()
+     |
+
+error[E0063]: missing field `credentials` in 
+initializer of `WorkspacesRegistry`
+   --> src\models.rs:310:23
+    |
+310 |             registry: 
+WorkspacesRegistry {
+    |                       
+^^^^^^^^^^^^^^^^^^ missing `credentials`
+
+error[E0599]: no variant named 
+`WorkspaceCreated` found for enum `AppEvent`
+    --> src\ui.rs:4446:27
+     |
+4446 |                 
+AppEvent::WorkspaceCreated {
+     |                           
+^^^^^^^^^^^^^^^^
+     |
+    ::: src\app_shell.rs:1478:1
+     |
+1478 | pub enum AppEvent {
+     | ----------------- variant 
+`WorkspaceCreated` not found here
+     |
+help: there is a variant with a similar name
+     |
+4446 -                 
+AppEvent::WorkspaceCreated {
+4446 +                 
+AppEvent::WorkspaceDeleted {
+     |
+
+error[E0609]: no field `registry` on type 
+`WorkspaceState`
+    --> src\ui.rs:4453:42
+     |
+4453 |                     
+self.shell.workspace.registry = 
+WorkspacesRegistry {
+     |                                        
+  ^^^^^^^^ unknown field
+     |
+     = note: available fields are: 
+`workspace_id`, `workspace_name`, 
+`all_workspaces`, `request_panel_title`, 
+`response_panel_title`
+
+error[E0599]: no associated function or 
+constant named `after` found for struct 
+`Timer` in the current scope
+    --> src\ui.rs:5231:24
+     |
+5231 |                 
+Timer::after(Duration::from_secs(10)).await;
+     |                        ^^^^^ 
+associated function or constant not found in 
+`Timer`
+     |
+note: if you're trying to build a new `Timer` 
+consider using one of the following 
+associated functions:
+      Timer::new
+      Timer::with_capacity
+    --> C:\Users\btpow\.cargo\registry\src\ind
+ex.crates.io-1949cf8c6b5b557f\timer-0.2.0\src\
+lib.rs:346:5
+     |
+ 346 |     pub fn new() -> Self {
+     |     ^^^^^^^^^^^^^^^^^^^^
+...
+ 351 |     pub fn with_capacity(capacity: 
+usize) -> Self {
+     |     
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0609]: no field `destructive` on type 
+`&Theme`
+    --> src\ui.rs:8122:86
+     |
+8122 | ...                   let color = if 
+ttl < 60 { cx.theme().destructive } else { 
+cx.theme().muted_foreground };
+     |                                        
+                    ^^^^^^^^^^^ unknown field
+     |
+     = note: available fields are: `colors`, 
+`highlight_theme`, `light_theme`, 
+`dark_theme`, `mode` ... and 15 others
+     = note: available fields are: `accent`, 
+`accent_foreground`, `accordion`, 
+`accordion_hover`, `background` ... and 95 
+others
+
+Some errors have detailed explanations: 
+E0063, E0599, E0609.
+For more information about an error, try 
+`rustc --explain E0063`.
+error: could not compile `beam` (lib) due to 
+6 previous errors

@@ -70,6 +70,7 @@ fn main() {
         &workspace_paths,
         active_entry.as_ref(),
         all_workspaces,
+        registry.registry.credentials.clone(),
     ) {
         StartupLoad::Ready { state, messages } => {
             for message in &messages {

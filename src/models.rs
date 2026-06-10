@@ -38,6 +38,23 @@ pub enum ApiKeyLocation {
     Query,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OAuth2GrantType {
+    ClientCredentials,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OAuth2Credential {
+    pub id: Ulid,
+    pub name: String,
+    pub grant_type: OAuth2GrantType,
+    pub token_url: String,
+    pub client_id: String,
+    pub client_secret: String,
+    pub scope: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceFile {
     pub schema_version: u32,
@@ -159,6 +176,7 @@ pub struct QueryParamField {
 pub enum AuthConfig {
     None,
     Bearer { token: Option<String> },
+    BearerStored { credential_id: Ulid },
     Basic {
         username: Option<String>,
         password: Option<String>,
@@ -266,6 +284,8 @@ pub struct WorkspacesRegistry {
     pub active_workspace_id: Option<Ulid>,
     #[serde(default)]
     pub workspaces: Vec<WorkspaceEntry>,
+    #[serde(default)]
+    pub credentials: Vec<OAuth2Credential>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -295,6 +315,7 @@ impl WorkspacesRegistryFile {
                     path,
                     created_at: Utc::now(),
                 }],
+                credentials: Vec::new(),
             },
         }
     }
