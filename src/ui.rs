@@ -35,7 +35,7 @@ use crate::app_shell::{
 use crate::assets::{Assets, embedded_theme_contents};
 use crate::models::{
     AuthConfig, BodyConfig, EnvironmentFile, EnvironmentScope, EnvironmentVariable, HttpMethod,
-    LocalStateFile, OAuth2Credential, OAuth2GrantType, RequestFile
+    LocalStateFile, OAuth2Credential, OAuth2GrantType, RequestFile,
 };
 use crate::paths::{BeamPaths, DataRootPaths};
 use crate::post_script_help::POST_SCRIPT_API_HELP_MARKDOWN;
@@ -560,6 +560,7 @@ enum SettingsSection {
 struct SettingsDialogView {
     beam_view: Entity<BeamView>,
     selected_section: SettingsSection,
+    credential_manager_view: Option<Entity<CredentialManagerView>>,
 }
 
 impl SettingsDialogView {
@@ -567,6 +568,7 @@ impl SettingsDialogView {
         Self {
             beam_view,
             selected_section: SettingsSection::Theme,
+            credential_manager_view: None,
         }
     }
 }
@@ -636,12 +638,17 @@ impl Render for SettingsDialogView {
                     );
             }
             SettingsSection::Credentials => {
-                right_panel = right_panel.child(
-                    div()
-                        .w_full()
-                        .h_full()
-                        .child(cx.new(|cx| CredentialManagerView::new(self.beam_view.clone(), window, cx))),
-                );
+                // Lazily create the credential manager on first visit, then persist it.
+                let manager = if let Some(ref existing) = self.credential_manager_view {
+                    existing.clone()
+                } else {
+                    let m =
+                        cx.new(|cx| CredentialManagerView::new(self.beam_view.clone(), window, cx));
+                    self.credential_manager_view = Some(m.clone());
+                    m
+                };
+                right_panel =
+                    right_panel.child(div().w_full().h_full().child(manager.into_any_element()));
             }
         }
 
@@ -725,7 +732,8 @@ impl CredentialManagerView {
     fn new(beam_view: Entity<BeamView>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("Connection Name"));
         let client_id_input = cx.new(|cx| InputState::new(window, cx).placeholder("Client ID"));
-        let client_secret_input = cx.new(|cx| InputState::new(window, cx).placeholder("Client Secret"));
+        let client_secret_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Client Secret"));
         let token_url_input = cx.new(|cx| InputState::new(window, cx).placeholder("Token URL"));
         let scope_input = cx.new(|cx| InputState::new(window, cx).placeholder("Scope (Optional)"));
 
@@ -750,52 +758,83 @@ impl CredentialManagerView {
         this
     }
 
-
     fn rebuild_subscriptions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.input_subscriptions.clear();
 
         let name_input = self.name_input.clone();
-        self.input_subscriptions.push(cx.subscribe_in(&name_input, window, move |this, _, ev, _, cx| {
-            if matches!(ev, InputEvent::Change) {
-                this.save_current(cx);
-            }
-        }));
+        self.input_subscriptions.push(cx.subscribe_in(
+            &name_input,
+            window,
+            move |this, _, ev, _, cx| {
+                if matches!(ev, InputEvent::Change) {
+                    this.save_current(cx);
+                }
+            },
+        ));
 
         let client_id_input = self.client_id_input.clone();
-        self.input_subscriptions.push(cx.subscribe_in(&client_id_input, window, move |this, _, ev, _, cx| {
-            if matches!(ev, InputEvent::Change) {
-                this.save_current(cx);
-            }
-        }));
+        self.input_subscriptions.push(cx.subscribe_in(
+            &client_id_input,
+            window,
+            move |this, _, ev, _, cx| {
+                if matches!(ev, InputEvent::Change) {
+                    this.save_current(cx);
+                }
+            },
+        ));
 
         let client_secret_input = self.client_secret_input.clone();
-        self.input_subscriptions.push(cx.subscribe_in(&client_secret_input, window, move |this, _, ev, _, cx| {
-            if matches!(ev, InputEvent::Change) {
-                this.save_current(cx);
-            }
-        }));
+        self.input_subscriptions.push(cx.subscribe_in(
+            &client_secret_input,
+            window,
+            move |this, _, ev, _, cx| {
+                if matches!(ev, InputEvent::Change) {
+                    this.save_current(cx);
+                }
+            },
+        ));
 
         let token_url_input = self.token_url_input.clone();
-        self.input_subscriptions.push(cx.subscribe_in(&token_url_input, window, move |this, _, ev, _, cx| {
-            if matches!(ev, InputEvent::Change) {
-                this.save_current(cx);
-            }
-        }));
+        self.input_subscriptions.push(cx.subscribe_in(
+            &token_url_input,
+            window,
+            move |this, _, ev, _, cx| {
+                if matches!(ev, InputEvent::Change) {
+                    this.save_current(cx);
+                }
+            },
+        ));
 
         let scope_input = self.scope_input.clone();
-        self.input_subscriptions.push(cx.subscribe_in(&scope_input, window, move |this, _, ev, _, cx| {
-            if matches!(ev, InputEvent::Change) {
-                this.save_current(cx);
-            }
-        }));
+        self.input_subscriptions.push(cx.subscribe_in(
+            &scope_input,
+            window,
+            move |this, _, ev, _, cx| {
+                if matches!(ev, InputEvent::Change) {
+                    this.save_current(cx);
+                }
+            },
+        ));
     }
 
-    fn sync_inputs_from_credential(&mut self, cred: &OAuth2Credential, window: &mut Window, cx: &mut Context<Self>) {
-        self.name_input.update(cx, |i, cx| i.set_value(cred.name.clone(), window, cx));
-        self.client_id_input.update(cx, |i, cx| i.set_value(cred.client_id.clone(), window, cx));
-        self.client_secret_input.update(cx, |i, cx| i.set_value(cred.client_secret.clone(), window, cx));
-        self.token_url_input.update(cx, |i, cx| i.set_value(cred.token_url.clone(), window, cx));
-        self.scope_input.update(cx, |i, cx| i.set_value(cred.scope.clone().unwrap_or_default(), window, cx));
+    fn sync_inputs_from_credential(
+        &mut self,
+        cred: &OAuth2Credential,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.name_input
+            .update(cx, |i, cx| i.set_value(cred.name.clone(), window, cx));
+        self.client_id_input
+            .update(cx, |i, cx| i.set_value(cred.client_id.clone(), window, cx));
+        self.client_secret_input.update(cx, |i, cx| {
+            i.set_value(cred.client_secret.clone(), window, cx)
+        });
+        self.token_url_input
+            .update(cx, |i, cx| i.set_value(cred.token_url.clone(), window, cx));
+        self.scope_input.update(cx, |i, cx| {
+            i.set_value(cred.scope.clone().unwrap_or_default(), window, cx)
+        });
     }
 
     fn save_current(&mut self, cx: &mut Context<Self>) {
@@ -805,7 +844,11 @@ impl CredentialManagerView {
         let client_secret = self.client_secret_input.read(cx).value().to_string();
         let token_url = self.token_url_input.read(cx).value().to_string();
         let scope_text = self.scope_input.read(cx).value().to_string();
-        let scope = if scope_text.trim().is_empty() { None } else { Some(scope_text) };
+        let scope = if scope_text.trim().is_empty() {
+            None
+        } else {
+            Some(scope_text)
+        };
 
         let mut credentials = self.beam_view.read(cx).shell.credentials.clone();
         if let Some(cred) = credentials.iter_mut().find(|c| c.id == id) {
@@ -838,7 +881,7 @@ impl CredentialManagerView {
             scope: None,
         };
         credentials.push(new_cred.clone());
-        
+
         let command = AppCommand::UpdateCredentials {
             credentials,
             command_id: next_command_id(),
@@ -894,40 +937,45 @@ impl Render for CredentialManagerView {
                     .bg(cx.theme().background)
                     .p_2()
                     .gap_2()
-                    .child(
-                        v_flex()
-                            .flex_1()
-                            .overflow_y_scrollbar()
-                            .children(credentials.into_iter().map(|cred| {
-                                let id = cred.id;
-                                ListItem::new(format!("cred-{}", id))
-                                    .child(
-                                        h_flex()
-                                            .w_full()
-                                            .items_center()
-                                            .justify_between()
-                                            .child(div().truncate().child(cred.name))
-                                            .child(
-                                                Button::new(format!("delete-cred-{}", id))
-                                                    .ghost()
-                                                    .small()
-                                                    .icon(Icon::default().path("icons/trash.svg").size(px(14.0)).text_color(cx.theme().muted_foreground))
-                                                    .on_click(cx.listener(move |this, _, window, cx| {
+                    .child(v_flex().flex_1().overflow_y_scrollbar().children(
+                        credentials.into_iter().map(|cred| {
+                            let id = cred.id;
+                            ListItem::new(format!("cred-{}", id))
+                                .child(
+                                    h_flex()
+                                        .w_full()
+                                        .items_center()
+                                        .justify_between()
+                                        .child(div().truncate().child(cred.name))
+                                        .child(
+                                            Button::new(format!("delete-cred-{}", id))
+                                                .ghost()
+                                                .small()
+                                                .icon(
+                                                    Icon::default()
+                                                        .path("icons/trash.svg")
+                                                        .size(px(14.0))
+                                                        .text_color(cx.theme().muted_foreground),
+                                                )
+                                                .on_click(cx.listener(
+                                                    move |this, _, window, cx| {
                                                         this.delete_credential(id, window, cx);
-                                                    }))
-                                            )
-                                    )
-                                    .selected(Some(id) == selected_id)
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.selected_id = Some(id);
-                                        let credentials = this.beam_view.read(cx).shell.credentials.clone();
-                                        if let Some(found) = credentials.iter().find(|c| c.id == id) {
-                                            this.sync_inputs_from_credential(found, window, cx);
-                                        }
-                                        cx.notify();
-                                    }))
-                            }))
-                    )
+                                                    },
+                                                )),
+                                        ),
+                                )
+                                .selected(Some(id) == selected_id)
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.selected_id = Some(id);
+                                    let credentials =
+                                        this.beam_view.read(cx).shell.credentials.clone();
+                                    if let Some(found) = credentials.iter().find(|c| c.id == id) {
+                                        this.sync_inputs_from_credential(found, window, cx);
+                                    }
+                                    cx.notify();
+                                }))
+                        }),
+                    ))
                     .child(
                         Button::new("add-credential")
                             .w_full()
@@ -935,8 +983,8 @@ impl Render for CredentialManagerView {
                             .label("Add Connection")
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.add_credential(window, cx);
-                            }))
-                    )
+                            })),
+                    ),
             )
             .child(
                 // Right side: details
@@ -952,31 +1000,66 @@ impl Render for CredentialManagerView {
                     .child(if selected_id.is_some() {
                         v_flex()
                             .gap_4()
-                            .child(div().text_sm().font_semibold().child("OAuth2 Client Credentials"))
                             .child(
-                                v_flex().gap_1()
-                                    .child(div().text_xs().text_color(cx.theme().muted_foreground).child("Name"))
-                                    .child(Input::new(&self.name_input).w_full())
+                                div()
+                                    .text_sm()
+                                    .font_semibold()
+                                    .child("OAuth2 Client Credentials"),
                             )
                             .child(
-                                v_flex().gap_1()
-                                    .child(div().text_xs().text_color(cx.theme().muted_foreground).child("Token URL"))
-                                    .child(Input::new(&self.token_url_input).w_full())
+                                v_flex()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child("Name"),
+                                    )
+                                    .child(Input::new(&self.name_input).w_full()),
                             )
                             .child(
-                                v_flex().gap_1()
-                                    .child(div().text_xs().text_color(cx.theme().muted_foreground).child("Client ID"))
-                                    .child(Input::new(&self.client_id_input).w_full())
+                                v_flex()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child("Token URL"),
+                                    )
+                                    .child(Input::new(&self.token_url_input).w_full()),
                             )
                             .child(
-                                v_flex().gap_1()
-                                    .child(div().text_xs().text_color(cx.theme().muted_foreground).child("Client Secret"))
-                                    .child(Input::new(&self.client_secret_input).w_full())
+                                v_flex()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child("Client ID"),
+                                    )
+                                    .child(Input::new(&self.client_id_input).w_full()),
                             )
                             .child(
-                                v_flex().gap_1()
-                                    .child(div().text_xs().text_color(cx.theme().muted_foreground).child("Scope (optional)"))
-                                    .child(Input::new(&self.scope_input).w_full())
+                                v_flex()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child("Client Secret"),
+                                    )
+                                    .child(Input::new(&self.client_secret_input).w_full()),
+                            )
+                            .child(
+                                v_flex()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child("Scope (optional)"),
+                                    )
+                                    .child(Input::new(&self.scope_input).w_full()),
                             )
                             .into_any_element()
                     } else {
@@ -990,7 +1073,7 @@ impl Render for CredentialManagerView {
                             .text_color(cx.theme().muted_foreground)
                             .child("Select a connection from the left pane.")
                             .into_any_element()
-                    })
+                    }),
             )
     }
 }
@@ -5210,10 +5293,11 @@ impl BeamView {
         // Capture a weak entity reference to BeamView.
         let weak_entity = cx.weak_entity();
         cx.spawn(async move |_, cx| {
-
             loop {
                 // Wait 10 seconds between checks.
-                cx.background_executor().timer(Duration::from_secs(10)).await;
+                cx.background_executor()
+                    .timer(Duration::from_secs(10))
+                    .await;
 
                 // Determine which credentials need renewal via a synchronous update on the weak entity.
                 let needs_renewal = match weak_entity.update(cx, |view, _| {
@@ -5221,7 +5305,9 @@ impl BeamView {
                     let now = chrono::Local::now();
                     for (cred_id, cached) in &view.shell.token_cache {
                         if cached.expires_at < now + chrono::Duration::minutes(5) {
-                            if let Some(cred) = view.shell.credentials.iter().find(|c| c.id == *cred_id) {
+                            if let Some(cred) =
+                                view.shell.credentials.iter().find(|c| c.id == *cred_id)
+                            {
                                 needs.push((*cred_id, cred.clone()));
                             }
                         }
@@ -5237,11 +5323,15 @@ impl BeamView {
                 }
 
                 // Shared HTTP client for all renewals.
-                let client = shared_http_client().map(|c| c.clone()).unwrap_or_else(|_| Client::new());
+                let client = shared_http_client()
+                    .map(|c| c.clone())
+                    .unwrap_or_else(|_| Client::new());
 
                 // Perform renewals sequentially (could be parallelized in the future).
                 for (cred_id, cred) in needs_renewal {
-                    if let Ok((token, expires_at)) = perform_oauth2_client_credentials_flow(&client, &cred).await {
+                    if let Ok((token, expires_at)) =
+                        perform_oauth2_client_credentials_flow(&client, &cred).await
+                    {
                         // Apply the token update back onto the BeamView state.
                         let _ = weak_entity.update(cx, |bv, _| {
                             bv.shell.apply_event(&AppEvent::TokenUpdated {
@@ -5253,7 +5343,8 @@ impl BeamView {
                     }
                 }
             }
-        }).detach();
+        })
+        .detach();
     }
 
     fn send_request(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -5468,7 +5559,8 @@ impl BeamView {
         credentials: Vec<crate::models::OAuth2Credential>,
         token_cache: HashMap<Ulid, crate::app_shell::CachedToken>,
     ) -> SendRequestOutcome {
-        let execution_result = execute_http_request(request.clone(), credentials, token_cache).await;
+        let execution_result =
+            execute_http_request(request.clone(), credentials, token_cache).await;
         let response = execution_result.response;
         let updated_token = execution_result.updated_token;
         let script_text = request.post_script.clone().unwrap_or_default();
@@ -7393,18 +7485,14 @@ impl BeamView {
                     ),
             )
             .child(
-                div()
-                    .w(px(360.0))
-                    .h(px(520.0))
-                    .overflow_hidden()
-                    .child(
-                        div().size_full().overflow_y_scrollbar().child(
-                            markdown(POST_SCRIPT_API_HELP_MARKDOWN)
-                                .w_full()
-                                .text_sm()
-                                .selectable(true),
-                        ),
+                div().w(px(360.0)).h(px(520.0)).overflow_hidden().child(
+                    div().size_full().overflow_y_scrollbar().child(
+                        markdown(POST_SCRIPT_API_HELP_MARKDOWN)
+                            .w_full()
+                            .text_sm()
+                            .selectable(true),
                     ),
+                ),
             );
         tabs = tabs.child(
             h_flex()
@@ -8083,7 +8171,7 @@ impl BeamView {
                                     let selected_name = credentials.iter().find(|c| c.id == selected_id).map(|c| c.name.clone()).unwrap_or_else(|| "Unknown".to_string());
                                     let cached = self.shell.token_cache.get(&selected_id).cloned();
                                     let view_weak = cx.entity();
-                                    
+
                                     v_flex()
                                         .w_full()
                                         .gap_1()
@@ -9449,8 +9537,10 @@ async fn execute_http_request(
         AuthConfig::BearerStored { credential_id } => {
             if let Some(cred) = credentials.iter().find(|c| c.id == *credential_id) {
                 let now = chrono::Local::now();
-                let cached = token_cache.get(credential_id).filter(|t| t.expires_at > now + chrono::Duration::seconds(30));
-                
+                let cached = token_cache
+                    .get(credential_id)
+                    .filter(|t| t.expires_at > now + chrono::Duration::seconds(30));
+
                 let token = if let Some(cached) = cached {
                     cached.token.clone()
                 } else {
